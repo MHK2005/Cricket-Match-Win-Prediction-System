@@ -1,0 +1,13 @@
+venv/
+myenv/
+__pycache__/
+.venv/
+.env
+*.ipynb_checkpoints
+*.ipynb
+*.csv
+*.bat
+*.ini
+*.xlsx
+*.md
+*.log
