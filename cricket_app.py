@@ -66,24 +66,6 @@ def randomize_match():
     st.session_state.t1_wkts = random.randint(2, 8)
     st.session_state.t2_wkts = random.randint(3, 10)
 
-def realistic_projection(runs, overs, max_overs, wkts):
-    if overs <= 0 or not max_overs:
-        return runs
-
-    current_rr = runs / overs
-
-    # Format caps
-    if max_overs == 20:
-        rr_cap = 11.5
-    elif max_overs == 50:
-        rr_cap = 8.5
-    else:
-        rr_cap = current_rr
-
-    wicket_factor = max(0.7, 1 - wkts * 0.05)
-    effective_rr = min(current_rr, rr_cap) * wicket_factor
-
-    return int(effective_rr * max_overs)
 
 def auto_complete_first_innings(match_format):
     if match_format == "T20":
@@ -107,16 +89,28 @@ def auto_complete_first_innings(match_format):
         "overs": None
     }
 
-def live_prob_adjustment(p_batting, p_chasing, curr_runs, curr_wkts, curr_overs, target, max_overs):
-    """
-    Aggressive real-world live adjustment.
-    p_batting: probability of team batting first
-    p_chasing: probability of chasing team
-    """
+def realistic_projection(runs, overs, max_overs, wkts):
+    if overs <= 0 or not max_overs:
+        return runs
 
-    # Safety
+    current_rr = runs / overs
+
+    # Format caps
+    if max_overs == 20:
+        rr_cap = 11.5
+    elif max_overs == 50:
+        rr_cap = 8.5
+    else:
+        rr_cap = current_rr
+
+    wicket_factor = max(0.7, 1 - wkts * 0.05)
+    effective_rr = min(current_rr, rr_cap) * wicket_factor
+
+    return int(effective_rr * max_overs)
+
+def pure_live_probability(curr_runs, curr_wkts, curr_overs, target, max_overs):
     if curr_overs <= 0 or target <= 0:
-        return p_batting, p_chasing
+        return 0.5  # neutral before chase
 
     overs_left = max(max_overs - curr_overs, 0.1)
     runs_left = max(target - curr_runs, 0)
@@ -124,50 +118,21 @@ def live_prob_adjustment(p_batting, p_chasing, curr_runs, curr_wkts, curr_overs,
     current_rr = curr_runs / curr_overs
     required_rr = runs_left / overs_left
 
-    # Pressure metrics
-    rr_gap = required_rr - current_rr
-    wicket_pressure = curr_wkts / 10
-    over_pressure = 1 - (overs_left / max_overs)
+    # Core match pressure score
+    rr_score = (current_rr - required_rr) / max(required_rr, 0.1)
+    wicket_score = (10 - curr_wkts) / 10
+    over_score = overs_left / max_overs
 
-    # PENALTIES
-    penalty = 0.0
+    # Heavy real-world weighting
+    match_score = (
+        rr_score * 0.60 +
+        wicket_score * 0.25 +
+        over_score * 0.15
+    )
 
-    # Required RR pressure
-    if rr_gap > 3:
-        penalty += 0.40
-    elif rr_gap > 2:
-        penalty += 0.28
-    elif rr_gap > 1:
-        penalty += 0.18
-    elif rr_gap > 0.5:
-        penalty += 0.10
-
-    # Wicket pressure
-    if curr_wkts >= 7:
-        penalty += 0.35
-    elif curr_wkts >= 5:
-        penalty += 0.22
-    elif curr_wkts >= 3:
-        penalty += 0.12
-
-    # Overs running out
-    if overs_left < max_overs * 0.2:
-        penalty += 0.25
-    elif overs_left < max_overs * 0.35:
-        penalty += 0.15
-
-    # Scale penalty so it doesn't exceed reason
-    penalty = min(penalty, 0.75)
-
-    # Apply to chasing team
-    p_chasing_adj = p_chasing * (1 - penalty)
-    p_batting_adj = 1 - p_chasing_adj
-
-    # Clamp (real-world systems NEVER show 0 or 100)
-    p_batting_adj = min(max(p_batting_adj, 0.02), 0.98)
-    p_chasing_adj = 1 - p_batting_adj
-
-    return p_batting_adj, p_chasing_adj
+    # Convert to probability
+    p = 0.5 + match_score * 0.45
+    return min(max(p, 0.01), 0.99)
 
 def display_rr(value, overs):
     if match_format == "TEST" or overs <= 0:
@@ -226,7 +191,7 @@ with st.sidebar:
     match_format = st.selectbox(
         "Match Format",
         ["T20", "ODI", "TEST"],
-        index=None,
+        index=1,
         placeholder="Select Format",
         key="match_format"
     )
@@ -485,9 +450,6 @@ if st.button("🚀 Submit"):
     toss_enc = team_encoder.transform([toss_winner])[0]
     toss_dec_enc = 1 if toss_decision == "Batting" else 0
 
-    pitch_bat = 1 if pitch_condition == "Batting Friendly" else 0
-    pitch_bowl = 1 if pitch_condition == "Bowling Friendly" else 0
-
     month = datetime.now().month
 
     # Build all possible features (safe superset)
@@ -550,25 +512,29 @@ if st.button("🚀 Submit"):
         p_chasing = p1
 
     if match_format in ["T20", "ODI"]:
-        p_batting, p_chasing = live_prob_adjustment(
-            p_batting=p_batting,
-            p_chasing=p_chasing,
+        p_chasing = pure_live_probability(
             curr_runs=inn2_runs,
             curr_wkts=inn2_wkts,
             curr_overs=inn2_overs,
             target=target,
             max_overs=MAX_OVERS
         )
-
-    # Normalize to 100%
-    if batting_first == team1:
-        p1, p2 = p_batting, p_chasing
+        p_batting = 1 - p_chasing
     else:
-        p1, p2 = p_chasing, p_batting
+        p_batting, p_chasing = p_batting, p_chasing
 
-    total = p1 + p2
-    t1_perc = round((p1 / total) * 100, 2)
-    t2_perc = round((p2 / total) * 100, 2)
+
+    # Final probability mapping
+    if batting_first == team1:
+        p1 = p_batting
+        p2 = p_chasing
+    else:
+        p2 = p_batting
+        p1 = p_chasing
+
+    t1_perc = round(p1 * 100, 2)
+    t2_perc = round(p2 * 100, 2)
+
 
     # Determine winner
     winner = team1 if p1 > p2 else team2
