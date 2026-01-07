@@ -10,3 +10,5 @@ __pycache__/
 *.ini
 *.xlsx
 *.log
+templates/
+app.py

@@ -85,11 +85,11 @@ def auto_complete_first_innings(match_format):
     # TEST: combined two innings
     return {
         "runs": random.randint(300, 550),
-        "wkts": random.randint(10, 20),  # both innings combined
+        "wkts": random.randint(10, 20),
         "overs": None
     }
 
-def realistic_projection(runs, overs, max_overs, wkts):
+def projected_innings_score(runs, overs, max_overs, wkts):
     if overs <= 0 or not max_overs:
         return runs
 
@@ -108,7 +108,7 @@ def realistic_projection(runs, overs, max_overs, wkts):
 
     return int(effective_rr * max_overs)
 
-def pure_live_probability(curr_runs, curr_wkts, curr_overs, target, max_overs):
+def calculate_win_probability(curr_runs, curr_wkts, curr_overs, target, max_overs):
     if curr_overs <= 0 or target <= 0:
         return 0.5  # neutral before chase
 
@@ -118,12 +118,10 @@ def pure_live_probability(curr_runs, curr_wkts, curr_overs, target, max_overs):
     current_rr = curr_runs / curr_overs
     required_rr = runs_left / overs_left
 
-    # Core match pressure score
     rr_score = (current_rr - required_rr) / max(required_rr, 0.1)
     wicket_score = (10 - curr_wkts) / 10
     over_score = overs_left / max_overs
 
-    # Heavy real-world weighting
     match_score = (
         rr_score * 0.60 +
         wicket_score * 0.25 +
@@ -191,16 +189,16 @@ with st.sidebar:
     match_format = st.selectbox(
         "Match Format",
         ["T20", "ODI", "TEST"],
-        index=1,
+        index=None,
         placeholder="Select Format",
         key="match_format"
     )
 
-    # Detect format change → hard reset
+    # Reset the app on format change
     if "prev_format" not in st.session_state:
         st.session_state.prev_format = match_format
 
-    if st.session_state.prev_format != match_format:
+    if st.session_state.prev_format != match_format and match_format is not None:
         for k in list(st.session_state.keys()):
             del st.session_state[k]
 
@@ -214,10 +212,15 @@ with st.sidebar:
     if st.button("🔄 Reset All", key="reset_btn"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
+        st.session_state.match_format = None
         st.session_state.team1_select = None
         st.session_state.team2_select = None
         st.session_state.submitted = False
         st.rerun()
+
+if not match_format:
+    st.warning("👈 Please select a match format from the sidebar to continue.")
+    st.stop()
 
 # --------------------------------------------------
 # STEP 1: TEAMS
@@ -269,6 +272,7 @@ st.markdown("")
 c1, c2 = st.columns(2)
 
 venue = c1.selectbox("Venue", venues, index=None, placeholder="Select Venue")
+
 pitch_condition = c2.selectbox(
     "Pitch Condition",
     ["Balanced", "Batting Friendly", "Bowling Friendly"],
@@ -283,8 +287,6 @@ if (venue and pitch_condition):
     st.success(f"✅ Venue & Pitch Condition set!  \n\nVenue: **{venue}**  \nPitch: **{pitch_condition}**")
 else:
     st.warning("👆 Please provide venue and pitch information")
-
-if not (venue and pitch_condition):
     st.stop()
 
 # --------------------------------------------------
@@ -306,8 +308,6 @@ if (toss_winner and toss_decision):
     st.success(f"✅ Toss: **{toss_winner}** won the toss and chose to **{"Bat" if toss_decision == "Batting" else "Bowl"}** first")
 else:    
     st.warning("👆 Please provide toss information")
-
-if not (toss_winner and toss_decision):
     st.stop()
 
 if not st.session_state.match_randomized:
@@ -321,7 +321,6 @@ st.divider()
 st.subheader("4️⃣ Match Details")
 st.markdown("")
 
-# AUTO-COMPLETE FIRST INNINGS
 if not st.session_state.auto_filled:
     auto = auto_complete_first_innings(match_format)
 
@@ -344,23 +343,22 @@ st.markdown(f"🏏 **Batting First:** {batting_first}")
 st.markdown(f"🥎 **Bowling First:** {bowling_first}")
 st.markdown("")
 
-# Overs by format
 if match_format == "T20":
     MAX_OVERS = 20
 elif match_format == "ODI":
     MAX_OVERS = 50
 else:
-    MAX_OVERS = None  # TEST
+    MAX_OVERS = None
 
 col1, col2 = st.columns(2)
 
-# SAFE DEFAULTS (important for TEST)
+# For TEST matches, combined innings
 inn2_overs = 0.0
 rr2 = 0.0
 rrr = 0.0
 runs_left = 0
 
-# FIRST INNINGS
+# First innings
 with col1:
     if match_format == "TEST":
         st.markdown(f"### Combined Innings – {team_abbr(batting_first)}")
@@ -380,7 +378,7 @@ with col1:
         inn1_overs = st.session_state.inn1_overs
 
         rr1 = inn1_runs / inn1_overs
-        proj1 = realistic_projection(
+        proj1 = projected_innings_score(
             inn1_runs,
             inn1_overs,
             MAX_OVERS,
@@ -394,7 +392,7 @@ with col1:
         t1_runs = inn1_runs
         t1_wkts = inn1_wkts
 
-# SECOND INNINGS
+# Second innings
 with col2:
     if match_format == "TEST":
         st.markdown(f"### Combined Innings – {team_abbr(bowling_first)}")
@@ -421,7 +419,7 @@ with col2:
         rr2 = inn2_runs / max(inn2_overs, 0.1)
         rrr = runs_left / overs_left
 
-        proj2 = realistic_projection(
+        proj2 = projected_innings_score(
             inn2_runs,
             max(inn2_overs, 0.1),
             MAX_OVERS,
@@ -452,7 +450,7 @@ if st.button("🚀 Submit"):
 
     month = datetime.now().month
 
-    # Build all possible features (safe superset)
+    # Build all possible features
     feature_dict = {
         # Venue & pitch
         "Venue": venue_enc,
@@ -512,7 +510,7 @@ if st.button("🚀 Submit"):
         p_chasing = p1
 
     if match_format in ["T20", "ODI"]:
-        p_chasing = pure_live_probability(
+        p_chasing = calculate_win_probability(
             curr_runs=inn2_runs,
             curr_wkts=inn2_wkts,
             curr_overs=inn2_overs,
@@ -522,7 +520,6 @@ if st.button("🚀 Submit"):
         p_batting = 1 - p_chasing
     else:
         p_batting, p_chasing = p_batting, p_chasing
-
 
     # Final probability mapping
     if batting_first == team1:
@@ -535,19 +532,16 @@ if st.button("🚀 Submit"):
     t1_perc = round(p1 * 100, 2)
     t2_perc = round(p2 * 100, 2)
 
-
     # Determine winner
     winner = team1 if p1 > p2 else team2
     confidence = max(t1_perc, t2_perc)
 
-    # MATCH SUMMARY
+    # Result display
     if st.session_state.submitted:
-
         st.markdown("---")
         st.subheader("🎯 Prediction Results")
         st.markdown("")
 
-        # Safe RR values
         display_current_rr = (
             rr2 if inn2_overs > 0 else 0.0
         )
@@ -580,7 +574,7 @@ if st.button("🚀 Submit"):
             f"{t2_perc}%"
         )
 
-    # Display Probability Bar
+    # Display probability bar
     st.markdown("")
     st.markdown("")
     st.subheader("🏆 Probability Bar")
