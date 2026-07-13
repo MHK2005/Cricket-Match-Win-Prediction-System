@@ -11,4 +11,3 @@ __pycache__/
 *.xlsx
 *.log
 templates/
-app.py
